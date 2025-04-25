@@ -27,8 +27,29 @@ void mergeSortSeq(int *arr, int l, int r) {
         merge(arr, l, m, r);
     }
 }
+#define THRESHOLD 5000  // Can tune this based on experimentation
 
-void mergeSortPar(int *arr, int l, int r, int depth) {
+void parallelMergeSort(int arr[], int left, int right) {
+    if (left < right) {
+        if ((right - left) < THRESHOLD) {
+            mergeSortSeq(arr, left, right); // fall back to sequential
+            return;
+        }
+
+        int mid = (left + right) / 2;
+
+        #pragma omp task
+        parallelMergeSort(arr, left, mid);
+
+        #pragma omp task
+        parallelMergeSort(arr, mid + 1, right);
+
+        #pragma omp taskwait
+        merge(arr, left, mid, right);
+    }
+}
+
+/*void mergeSortPar(int *arr, int l, int r, int depth) {
     if (l < r) {
         if (depth <= 0) {
             mergeSortSeq(arr, l, r);
@@ -45,7 +66,7 @@ void mergeSortPar(int *arr, int l, int r, int depth) {
         }
         merge(arr, l, m, r);
     }
-}
+}*/
 
 void generateRandomArray(int *arr, int n) {
     for (int i = 0; i < n; i++) arr[i] = rand() % 10000;
@@ -79,7 +100,17 @@ int main() {
     double seqTime = end - start;
 
     start = omp_get_wtime();
-    mergeSortPar(arr2, 0, n - 1, 4); // 4 levels of parallel recursion
+    if (n < THRESHOLD) {
+	parallelMergeSort(arr2, 0, n - 1);  // Will run sequential anyway
+    } else {
+    	#pragma omp parallel
+        {
+	#pragma omp single
+	parallelMergeSort(arr2, 0, n - 1);
+        }
+    }
+
+
     end = omp_get_wtime();
     double parTime = end - start;
 
