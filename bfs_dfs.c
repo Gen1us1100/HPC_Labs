@@ -2,49 +2,66 @@
 #include <stdlib.h>
 #include <omp.h>
 #include <stdbool.h>
+#include <time.h>
 
 #define MAX_VERTICES 10000
 
-// Graph using adjacency list
 typedef struct Node {
     int vertex;
     struct Node* next;
 } Node;
 
 Node* adjList[MAX_VERTICES];
-bool visited[MAX_VERTICES];
 
-// Add edge (undirected)
 void addEdge(int u, int v) {
-    Node* newNode = (Node*)malloc(sizeof(Node));
-    newNode->vertex = v;
-    newNode->next = adjList[u];
-    adjList[u] = newNode;
+    Node* node = (Node*)malloc(sizeof(Node));
+    node->vertex = v;
+    node->next = adjList[u];
+    adjList[u] = node;
 
-    newNode = (Node*)malloc(sizeof(Node));
-    newNode->vertex = u;
-    newNode->next = adjList[v];
-    adjList[v] = newNode;
+    node = (Node*)malloc(sizeof(Node));
+    node->vertex = u;
+    node->next = adjList[v];
+    adjList[v] = node;
 }
 
-// ---------------------- BFS --------------------------
+bool edgeExists(int u, int v) {
+    Node* temp = adjList[u];
+    while (temp) {
+        if (temp->vertex == v) return true;
+        temp = temp->next;
+    }
+    return false;
+}
 
+void generateRandomGraph(int n, int edges) {
+    srand(time(NULL));
+    int count = 0;
+    while (count < edges) {
+        int u = rand() % n;
+        int v = rand() % n;
+        if (u != v && !edgeExists(u, v)) {
+            addEdge(u, v);
+            count++;
+        }
+    }
+}
+
+// -------------------- BFS --------------------
 void bfsSequential(int start, int n) {
-    bool visitedSeq[MAX_VERTICES] = {false};
-    int queue[MAX_VERTICES];
-    int front = 0, rear = 0;
+    bool visited[MAX_VERTICES] = {false};
+    int queue[MAX_VERTICES], front = 0, rear = 0;
 
-    visitedSeq[start] = true;
+    visited[start] = true;
     queue[rear++] = start;
 
     while (front < rear) {
         int curr = queue[front++];
-
         Node* temp = adjList[curr];
-        while (temp != NULL) {
+        while (temp) {
             int v = temp->vertex;
-            if (!visitedSeq[v]) {
-                visitedSeq[v] = true;
+            if (!visited[v]) {
+                visited[v] = true;
                 queue[rear++] = v;
             }
             temp = temp->next;
@@ -53,138 +70,126 @@ void bfsSequential(int start, int n) {
 }
 
 void bfsParallel(int start, int n) {
-    bool visitedPar[MAX_VERTICES] = {false};
-    int queue[MAX_VERTICES];
-    int front = 0, rear = 0;
+    bool visited[MAX_VERTICES] = {false};
+    int queue[MAX_VERTICES], front = 0, rear = 0;
 
-    visitedPar[start] = true;
+    visited[start] = true;
     queue[rear++] = start;
 
     while (front < rear) {
-        int currentLevelSize = rear - front;
+        int currentSize = rear - front;
 
-        #pragma omp parallel for shared(queue, visitedPar)
-        for (int i = 0; i < currentLevelSize; i++) {
-            int curr = queue[front + i];
-            Node* temp = adjList[curr];
+        #pragma omp parallel for
+        for (int i = 0; i < currentSize; i++) {
+            int node = queue[front + i];
+            Node* temp = adjList[node];
 
-            while (temp != NULL) {
+            while (temp) {
                 int v = temp->vertex;
-
-                if (!visitedPar[v]) {
-                    #pragma omp critical
-                    {
-                        if (!visitedPar[v]) {
-                            visitedPar[v] = true;
-                            queue[rear++] = v;
-                        }
+                #pragma omp critical
+                {
+                    if (!visited[v]) {
+                        visited[v] = true;
+                        queue[rear++] = v;
                     }
                 }
                 temp = temp->next;
             }
         }
-        front += currentLevelSize;
+
+        front += currentSize;
     }
 }
 
-// ---------------------- DFS --------------------------
-
-void dfsSequentialUtil(int v, bool* visited) {
+// -------------------- DFS --------------------
+void dfsSequentialUtil(int v, bool visited[]) {
     visited[v] = true;
     Node* temp = adjList[v];
-
-    while (temp != NULL) {
-        if (!visited[temp->vertex]) {
+    while (temp) {
+        if (!visited[temp->vertex])
             dfsSequentialUtil(temp->vertex, visited);
-        }
         temp = temp->next;
     }
 }
 
 void dfsSequential(int start, int n) {
-    bool visitedSeq[MAX_VERTICES] = {false};
-    dfsSequentialUtil(start, visitedSeq);
+    bool visited[MAX_VERTICES] = {false};
+    dfsSequentialUtil(start, visited);
 }
 
-void dfsParallelUtil(int v, bool* visited) {
-    visited[v] = true;
+void dfsParallelUtil(int v, bool visited[]) {
+    bool proceed = false;
+
+    #pragma omp critical
+    {
+        if (!visited[v]) {
+            visited[v] = true;
+            proceed = true;
+        }
+    }
+
+    if (!proceed) return;
+
     Node* temp = adjList[v];
 
     #pragma omp parallel
     {
         #pragma omp single nowait
         {
-            while (temp != NULL) {
-                int neighbor = temp->vertex;
-
+            for (Node* p = temp; p != NULL; p = p->next) {
+                int neighbor = p->vertex;
                 #pragma omp task firstprivate(neighbor)
-                {
-                    if (!visited[neighbor]) {
-                        #pragma omp critical
-                        {
-                            if (!visited[neighbor]) {
-                                dfsParallelUtil(neighbor, visited);
-                            }
-                        }
-                    }
-                }
-                temp = temp->next;
+                dfsParallelUtil(neighbor, visited);
             }
         }
     }
 }
 
 void dfsParallel(int start, int n) {
-    bool visitedPar[MAX_VERTICES] = {false};
-    dfsParallelUtil(start, visitedPar);
+    bool visited[MAX_VERTICES] = {false};
+    dfsParallelUtil(start, visited);
 }
 
-// ---------------------- Driver --------------------------
-
+// -------------------- MAIN --------------------
 int main() {
-    int n = 10000;  // Number of vertices
-    int edges = 20000;
+    int n, edges;
+    printf("Enter number of vertices: ");
+    scanf("%d", &n);
+    printf("Enter number of edges: ");
+    scanf("%d", &edges);
 
-    // Creating a random connected undirected graph
     for (int i = 0; i < n; i++) adjList[i] = NULL;
-    for (int i = 1; i < n; i++) addEdge(i, i - 1); // Make sure it's connected
-    for (int i = 0; i < edges; i++) {
-        int u = rand() % n;
-        int v = rand() % n;
-        if (u != v) addEdge(u, v);
-    }
 
-    double startTime, endTime;
+    printf("Generating random graph with %d vertices and %d edges...\n", n, edges);
+    generateRandomGraph(n, edges);
 
-    // Sequential BFS
-    startTime = omp_get_wtime();
+    double t1, t2;
+
+    t1 = omp_get_wtime();
     bfsSequential(0, n);
-    endTime = omp_get_wtime();
-    double bfs_seq_time = endTime - startTime;
-    printf("Sequential BFS Time: %.4f seconds\n", bfs_seq_time);
+    t2 = omp_get_wtime();
+    double bfs_seq = t2 - t1;
+    printf("Sequential BFS Time: %.6f\n", bfs_seq);
 
-    // Parallel BFS
-    startTime = omp_get_wtime();
+    t1 = omp_get_wtime();
     bfsParallel(0, n);
-    endTime = omp_get_wtime();
-    double bfs_par_time = endTime - startTime;
-    printf("Parallel BFS Time:   %.4f seconds\n", bfs_par_time);
-    printf("BFS Speedup: %.2fx\n", bfs_seq_time / bfs_par_time);
+    t2 = omp_get_wtime();
+    double bfs_par = t2 - t1;
+    printf("Parallel BFS Time:   %.6f\n", bfs_par);
+    printf("BFS Speedup: %.2fx\n", bfs_seq / bfs_par);
 
-    // Sequential DFS
-    startTime = omp_get_wtime();
+    t1 = omp_get_wtime();
     dfsSequential(0, n);
-    endTime = omp_get_wtime();
-    double dfs_seq_time = endTime - startTime;
-    printf("Sequential DFS Time: %.4f seconds\n", dfs_seq_time);
+    t2 = omp_get_wtime();
+    double dfs_seq = t2 - t1;
+    printf("Sequential DFS Time: %.6f\n", dfs_seq);
 
-    // Parallel DFS
-    startTime = omp_get_wtime();
+    t1 = omp_get_wtime();
     dfsParallel(0, n);
-    endTime = omp_get_wtime();
-    double dfs_par_time = endTime - startTime;
-    printf("Parallel DFS Time:   %.4f seconds\n", dfs_par_time);
-    printf("DFS Speedup: %.2fx\n", dfs_seq_time / dfs_par_time);
+    t2 = omp_get_wtime();
+    double dfs_par = t2 - t1;
+    printf("Parallel DFS Time:   %.6f\n", dfs_par);
+    printf("DFS Speedup: %.2fx\n", dfs_seq / dfs_par);
 
     return 0;
 }
