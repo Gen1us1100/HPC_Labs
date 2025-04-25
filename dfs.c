@@ -1,144 +1,144 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <omp.h>
 #include <time.h>
+#include <omp.h>
 
-// use following command to instruct linux for unlimited stack space and avoid segmentation fault
-// ulimit -s unlimited
+#define MAX_THREADS 8
+
 typedef struct Node {
     int vertex;
     struct Node* next;
 } Node;
 
-Node** createGraph(int n) {
-    Node** adjList = (Node**)malloc(n * sizeof(Node*));
-    for (int i = 0; i < n; i++) adjList[i] = NULL;
-    return adjList;
+typedef struct {
+    Node** adjList;
+    int V;
+} Graph;
+
+Graph* createGraph(int V) {
+    Graph* graph = (Graph*)malloc(sizeof(Graph));
+    graph->V = V;
+    graph->adjList = (Node**)malloc(V * sizeof(Node*));
+    for (int i = 0; i < V; i++) graph->adjList[i] = NULL;
+    return graph;
 }
 
-void addEdge(Node** adjList, int u, int v) {
+void addEdge(Graph* graph, int src, int dest) {
     Node* newNode = (Node*)malloc(sizeof(Node));
-    newNode->vertex = v;
-    newNode->next = adjList[u];
-    adjList[u] = newNode;
+    newNode->vertex = dest;
+    newNode->next = graph->adjList[src];
+    graph->adjList[src] = newNode;
 
     newNode = (Node*)malloc(sizeof(Node));
-    newNode->vertex = u;
-    newNode->next = adjList[v];
-    adjList[v] = newNode;
+    newNode->vertex = src;
+    newNode->next = graph->adjList[dest];
+    graph->adjList[dest] = newNode;
 }
 
-void generateRandomGraph(Node** adjList, int n) {
-    srand(time(NULL));
-    for (int i = 1; i < n; i++) {
-        int v = rand() % i;
-        addEdge(adjList, i, v);
-    }
-
-    int extraEdges = n;
-    for (int i = 0; i < extraEdges; i++) {
-        int u = rand() % n;
-        int v = rand() % n;
-        if (u != v) addEdge(adjList, u, v);
+void generateRandomTree(Graph* graph, int V) {
+    for (int i = 1; i < V; i++) {
+        int parent = rand() % i;
+        addEdge(graph, parent, i);
     }
 }
 
-void dfsSequentialUtil(Node** adjList, int v, bool* visited) {
-    visited[v] = true;
-    for (Node* temp = adjList[v]; temp; temp = temp->next) {
-        if (!visited[temp->vertex]) {
-            dfsSequentialUtil(adjList, temp->vertex, visited);
+void DFSSequential(Graph* graph, int start, bool* visited) {
+    int* stack = (int*)malloc(graph->V * sizeof(int));
+    int top = -1;
+    stack[++top] = start;
+
+    while (top >= 0) {
+        int curr = stack[top--];
+        if (!visited[curr]) {
+            visited[curr] = true;
+            Node* temp = graph->adjList[curr];
+            while (temp) {
+                if (!visited[temp->vertex])
+                    stack[++top] = temp->vertex;
+                temp = temp->next;
+            }
         }
     }
+    free(stack);
 }
 
-void dfsSequential(Node** adjList, int n, int start) {
-    bool* visited = (bool*)calloc(n, sizeof(bool));
-    dfsSequentialUtil(adjList, start, visited);
-    free(visited);
-}
+void DFSParallel(Graph* graph, int start, bool* visited) {
+    int* frontier = (int*)malloc(graph->V * sizeof(int));
+    int frontierSize = 1;
+    frontier[0] = start;
+    omp_lock_t* locks = (omp_lock_t*)malloc(graph->V * sizeof(omp_lock_t));
+    for (int i = 0; i < graph->V; i++) omp_init_lock(&locks[i]);
 
-void dfsParallelUtil(Node** adjList, int v, bool* visited, omp_lock_t* locks) {
-    omp_set_lock(&locks[v]);
-    if (visited[v]) {
-        omp_unset_lock(&locks[v]);
-        return;
-    }
-    visited[v] = true;
-    omp_unset_lock(&locks[v]);
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(MAX_THREADS)
+    for (int i = 0; i < frontierSize; i++) {
+        int* localStack = (int*)malloc(graph->V * sizeof(int));
+        int top = -1;
+        localStack[++top] = frontier[i];
 
-    // Count neighbors first
-    int neighborCount = 0;
-    for (Node* temp = adjList[v]; temp; temp = temp->next) neighborCount++;
+        while (top >= 0) {
+            int curr = localStack[top--];
 
-    int* neighbors = (int*)malloc(neighborCount * sizeof(int));
-    int i = 0;
-    for (Node* temp = adjList[v]; temp; temp = temp->next)
-        neighbors[i++] = temp->vertex;
-
-    #pragma omp parallel for
-    for (int j = 0; j < neighborCount; j++) {
-        int u = neighbors[j];
-        #pragma omp task firstprivate(u)
-        {
-            dfsParallelUtil(adjList, u, visited, locks);
+            if (!visited[curr]) {
+                omp_set_lock(&locks[curr]);
+                if (!visited[curr]) {
+                    visited[curr] = true;
+                    Node* temp = graph->adjList[curr];
+                    while (temp) {
+                        if (!visited[temp->vertex])
+                            localStack[++top] = temp->vertex;
+                        temp = temp->next;
+                    }
+                }
+                omp_unset_lock(&locks[curr]);
+            }
         }
+        free(localStack);
     }
-
-    #pragma omp taskwait
-    free(neighbors);
-}
-
-void dfsParallel(Node** adjList, int n, int start) {
-    bool* visited = (bool*)calloc(n, sizeof(bool));
-    omp_lock_t* locks = (omp_lock_t*)malloc(n * sizeof(omp_lock_t));
-    for (int i = 0; i < n; i++) omp_init_lock(&locks[i]);
-
-    #pragma omp parallel
-    {
-        #pragma omp single
-        dfsParallelUtil(adjList, start, visited, locks);
-    }
-
-    for (int i = 0; i < n; i++) omp_destroy_lock(&locks[i]);
+    for (int i = 0; i < graph->V; i++) omp_destroy_lock(&locks[i]);
     free(locks);
-    free(visited);
+    free(frontier);
 }
 
 int main() {
-    int n;
+    int V;
     printf("Enter number of vertices: ");
-    scanf("%d", &n);
+    scanf("%d", &V);
 
-    Node** adjList = createGraph(n);
-    generateRandomGraph(adjList, n);
+    Graph* graph = createGraph(V);
+    generateRandomTree(graph, V);
 
-    double start, end;
+    bool* visitedSeq = (bool*)calloc(V, sizeof(bool));
+    bool* visitedPar = (bool*)calloc(V, sizeof(bool));
 
-    start = omp_get_wtime();
-    dfsSequential(adjList, n, 0);
-    end = omp_get_wtime();
-    double time_seq = end - start;
-    printf("Sequential DFS Time: %.6f s\n", time_seq);
+    double startTime, endTime;
 
-    start = omp_get_wtime();
-    dfsParallel(adjList, n, 0);
-    end = omp_get_wtime();
-    double time_par = end - start;
-    printf("Parallel DFS Time: %.6f s\n", time_par);
-    printf("DFS Speedup: %.2fx\n", time_seq / time_par);
+    startTime = omp_get_wtime();
+    DFSSequential(graph, 0, visitedSeq);
+    endTime = omp_get_wtime();
+    double seqTime = endTime - startTime;
+    printf("Sequential DFS Time: %f seconds\n", seqTime);
 
-    for (int i = 0; i < n; i++) {
-        Node* curr = adjList[i];
-        while (curr) {
-            Node* next = curr->next;
-            free(curr);
-            curr = next;
+    startTime = omp_get_wtime();
+    DFSParallel(graph, 0, visitedPar);
+    endTime = omp_get_wtime();
+    double parTime = endTime - startTime;
+    printf("Parallel DFS Time:   %f seconds\n", parTime);
+
+    if (parTime > 0)
+        printf("Speedup: %.2fx\n", seqTime / parTime);
+
+    free(visitedSeq);
+    free(visitedPar);
+    for (int i = 0; i < V; i++) {
+        Node* temp = graph->adjList[i];
+        while (temp) {
+            Node* toFree = temp;
+            temp = temp->next;
+            free(toFree);
         }
     }
-    free(adjList);
-
+    free(graph->adjList);
+    free(graph);
     return 0;
 }
-
