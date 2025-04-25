@@ -99,15 +99,19 @@ int main() {
     end = omp_get_wtime();
     double seqTime = end - start;
 
-    start = omp_get_wtime();
-    if (n < THRESHOLD) {
-	parallelMergeSort(arr2, 0, n - 1);  // Will run sequential anyway
-    } else {
+
+    if (n > THRESHOLD) {
+	start = omp_get_wtime();
     	#pragma omp parallel
         {
-	#pragma omp single
-	parallelMergeSort(arr2, 0, n - 1);
+		#pragma omp single
+		
+		parallelMergeSort(arr2, 0, n - 1);
         }
+	
+    } else {
+	   start = omp_get_wtime();
+    	   parallelMergeSort(arr2, 0, n - 1);
     }
 
 
