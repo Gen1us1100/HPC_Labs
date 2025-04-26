@@ -192,14 +192,31 @@ int main() {
     // The `#pragma omp single` directive ensures that ONLY ONE thread
     // from the team makes the *initial* call to parallelMergeSort.
     // That single call will then generate all the necessary tasks for the team to execute.
-    #pragma omp parallel
-    {
-        #pragma omp single // Only one thread starts the recursive task generation
+  
+      // *** Optimization: Check if parallel region is even needed ***
+    // If the total array size is smaller than the threshold where
+    // parallelMergeSort would just call sequentialMergeSort anyway,
+    // skip creating the parallel region to avoid its overhead.
+    if (n > MIN_SIZE_FOR_PARALLEL) {
+        // --- Use Parallel Execution ---
+        #pragma omp parallel // Create the thread team
         {
-            parallelMergeSort(arrayParallel, 0, n - 1);
-        } // End of single region
-    } // End of parallel region (threads synchronize and disband here)
-
+            #pragma omp single // Only one thread starts the recursive task generation
+            {
+                parallelMergeSort(arrayParallel, 0, n - 1);
+            } // End of single region
+        } // End of parallel region (threads synchronize and disband here)
+    } else {
+        // --- Fallback for Small Arrays ---
+        // The array is too small, just run the sequential version directly.
+        // (Calling parallelMergeSort here would also work, as it would
+        // immediately call sequentialMergeSort, but calling sequential directly
+        // slightly more clearly shows what's happening).
+        printf(" (Array size <= threshold, running sequentially)\n");
+        sequentialMergeSort(arrayParallel, 0, n - 1);
+        // Alternatively, you could still call parallelMergeSort here, it would just fall back:
+        // parallelMergeSort(arrayParallel, 0, n - 1);
+    }
     double endTimePar = omp_get_wtime();   // Get end time
     double timeParallel = endTimePar - startTimePar;
 
